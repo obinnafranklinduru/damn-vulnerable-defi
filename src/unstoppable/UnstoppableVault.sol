@@ -81,7 +81,14 @@ contract UnstoppableVault is IERC3156FlashLender, ReentrancyGuard, Owned, ERC462
     {
         if (amount == 0) revert InvalidAmount(0); // fail early
         if (address(asset) != _token) revert UnsupportedCurrency(); // enforce ERC3156 requirement
+
         uint256 balanceBefore = totalAssets();
+
+        // [AUDIT VULNERABILITY]: Strict Equality & Unit Mismatch (DoS)
+        // 1. `convertToShares(uint256 assets)` expects assets, but receives `totalSupply` (shares).
+        // 2. Strict equality (`!= balanceBefore`) breaks whenever raw tokens are transferred directly
+        //    to the vault without minting shares (e.g. via direct ERC-20 transfer).
+        // Remediation: Remove strict equality check or track deposits via internal accounting.
         if (convertToShares(totalSupply) != balanceBefore) revert InvalidBalance(); // enforce ERC4626 requirement
 
         // transfer tokens out + execute callback on receiver

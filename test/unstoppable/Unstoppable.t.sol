@@ -89,9 +89,33 @@ contract UnstoppableChallenge is Test {
 
     /**
      * CODE YOUR SOLUTION HERE
+     *
+     * VULNERABILITY: Strict Balance Equality / Internal Accounting Desynchronization
+     * 
+     * ROOT CAUSE:
+     * 1. Dimensional Mismatch:
+     *    `convertToShares(uint256 assets)` expects an amount of underlying assets, but
+     *    `UnstoppableVault.flashLoan()` passes `totalSupply` (a quantity of shares).
+     * 2. Strict Balance Equality Assumption:
+     *    The vault enforces `convertToShares(totalSupply) == balanceBefore`.
+     *    `balanceBefore` dynamically queries `asset.balanceOf(address(this))`.
+     *    The protocol mistakenly assumes token balance can only change via `deposit()` / `withdraw()`.
+     *
+     * EXPLOIT MECHANISM:
+     * - A direct ERC-20 `transfer()` directly increases `asset.balanceOf(vault)` without calling
+     *   `vault.deposit()`, meaning `totalSupply` remains constant.
+     * - This desynchronizes `totalAssets()` and `totalSupply`.
+     * - As a result, `convertToShares(totalSupply)` will strictly evaluate to less than `balanceBefore`,
+     *   permanently triggering `InvalidBalance()` on any future `flashLoan()` call.
+     *
+     * IMPACT:
+     * - Permanent Denial of Service (DoS) of the flash loan feature.
+     * - The `UnstoppableMonitor` catches the revert, pauses the vault, and transfers ownership.
      */
     function test_unstoppable() public checkSolvedByPlayer {
-        
+        // Direct transfer to the vault desynchronizes internal share accounting from raw token balance.
+        // Even 1 wei of DVT is sufficient to break the strict equality check.
+        token.transfer(address(vault), INITIAL_PLAYER_TOKEN_BALANCE);
     }
 
     /**
