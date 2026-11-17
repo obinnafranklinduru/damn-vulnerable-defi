@@ -91,7 +91,7 @@ contract UnstoppableChallenge is Test {
      * CODE YOUR SOLUTION HERE
      *
      * VULNERABILITY: Strict Balance Equality / Internal Accounting Desynchronization
-     * 
+     *
      * ROOT CAUSE:
      * 1. Dimensional Mismatch:
      *    `convertToShares(uint256 assets)` expects an amount of underlying assets, but

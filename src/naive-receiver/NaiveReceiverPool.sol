@@ -35,11 +35,18 @@ contract NaiveReceiverPool is Multicall, IERC3156FlashLender {
         return 0;
     }
 
+    // [AUDIT OBSERVATION]: Second parameter (`uint256 amount`) is unnamed/ignored.
+    // Even if `amount == 0`, the pool still charges `FIXED_FEE` (1 WETH).
     function flashFee(address token, uint256) external view returns (uint256) {
         if (token != address(weth)) revert UnsupportedCurrency();
         return FIXED_FEE;
     }
 
+    // [AUDIT OBSERVATION]:
+    // 1. No access control and no `amount == 0` guard. Anyone can initiate a flash loan
+    //    for any `receiver` contract with `amount = 0`.
+    // 2. Passes `msg.sender` as the first argument (`initiator`) to `receiver.onFlashLoan(...)`.
+    // 3. Credits the 1 WETH `FIXED_FEE` to `deposits[feeReceiver]` (which is `deployer`).
     function flashLoan(IERC3156FlashBorrower receiver, address token, uint256 amount, bytes calldata data)
         external
         returns (bool)
@@ -58,11 +65,16 @@ contract NaiveReceiverPool is Multicall, IERC3156FlashLender {
         weth.transferFrom(address(receiver), address(this), amountWithFee);
         totalDeposits += amountWithFee;
 
+        // Fee is credited to `feeReceiver` (`deployer`), NOT the borrower!
+        // After 10 flash loans against `receiver`, `deposits[deployer]` grows from 1,000 WETH to 1,010 WETH.
         deposits[feeReceiver] += FIXED_FEE;
 
         return true;
     }
 
+    // [AUDIT OBSERVATION - Follow the Money]:
+    // Only function that permanently removes WETH from the pool.
+    // Relies on `_msgSender()` to determine whose `deposits[...]` balance to deduct from.
     function withdraw(uint256 amount, address payable receiver) external {
         // Reduce deposits
         deposits[_msgSender()] -= amount;
@@ -83,6 +95,18 @@ contract NaiveReceiverPool is Multicall, IERC3156FlashLender {
         totalDeposits += amount;
     }
 
+    // [AUDIT VULNERABILITY #2]: ERC-2771 `_msgSender()` Spoofing via `Multicall` (`delegatecall`)
+    // - Assumption: When `msg.sender == trustedForwarder`, the last 20 bytes of `msg.data`
+    //   (`msg.data[msg.data.length - 20:]`) was appended by `BasicForwarder.execute` after verifying
+    //   the signer's EIP-712 signature.
+    // - Why this assumption breaks with `Multicall`:
+    //   1. `player` signs a forwarder request calling `pool.multicall(callData)`.
+    //   2. `BasicForwarder` calls `pool.multicall(callData)` with `msg.sender = trustedForwarder`
+    //      and appends `player` to the outer `msg.data`.
+    //   3. Inside `multicall`, each `callData[i]` is executed via `address(this).delegatecall(callData[i])`.
+    //   4. `delegatecall` PRESERVES `msg.sender == trustedForwarder`, but REPLACES `msg.data` with `callData[i]`!
+    //   5. An attacker can append ANY 20-byte address (e.g., `deployer`) to the end of `callData[i]`,
+    //      causing `_msgSender()` inside `withdraw()` to return `deployer`!
     function _msgSender() internal view override returns (address) {
         if (msg.sender == trustedForwarder && msg.data.length >= 20) {
             return address(bytes20(msg.data[msg.data.length - 20:]));
